@@ -27,7 +27,7 @@ class orm{
     /**
      * create empty row in $table that can be stored later in db
      */
-    function create($table){
+    function create($table): OrmObject{
         return new OrmObject($table);
     }
 
@@ -40,6 +40,11 @@ class orm{
             $res = yield $this->driver->getone($this->driver->prepare("SELECT * FROM $table WHERE id = ?", [$id]));
             return new OrmObject($table, $res ?? []);
         });
+    }
+
+    /** reload ormObject from db */
+    function reload($ormObject){
+        return $this->load($ormObject->getMeta('type'), $ormObject->id);
     }
 
     // function find($table, $where, $data){
@@ -58,7 +63,7 @@ class orm{
      * @throw Amp\Sql\QueryError if table or column not exist
      * 
      * @return Amp\Promise<ormObject>|null */
-    function findone($table, $where, $data){
+    function findone($table, $where = '1', $data = []){
         return call(function () use ($table, $where, $data) {
             $return_value = null;
 
@@ -68,6 +73,17 @@ class orm{
             }
             return $return_value;
 
+        });
+    }
+
+    function trash($ormObject){
+        return $this->driver->resultSetToArray($this->driver->prepare("DELETE FROM {$ormObject->getMeta('type')} WHERE id = ? ", [$ormObject->id]));
+    }
+
+    function count($table, $where = '1', $bind = []){
+        return call(function() use($table, $where, $bind){
+            $res = yield $this->driver->getone($this->driver->prepare("SELECT count(*) FROM $table WHERE $where ", $bind));
+            return current($res);
         });
     }
 
@@ -94,20 +110,22 @@ class orm{
                     $sql = "INSERT INTO {$table} (" . implode(', ', array_keys($changes)) . ") VALUES({$question}) ";
 
                     $res = yield $this->driver->prepare($sql, array_values($changes));
+                    $ormObject->id = $res->getLastInsertId();
                     $ormObject->save();
-                    return $res->getLastInsertId();
+                    return $ormObject->id;
 
                 } else { // its updated
 
                     $sql = "UPDATE {$table} SET ";
                     foreach ($changes as $key => $value) {
-                        $sql .= $key . ' = ?';
+                        $sql .= $key . ' = ?, ';
                     }
+                    $sql = rtrim($sql, ', ');
                     $sql .= " WHERE id = " . $id;
 
                     $res = yield $this->driver->resultSetToArray($this->driver->prepare($sql, array_values($changes)));
                     $ormObject->save();
-                    return $res;
+                    return $id; // return the id that updated
                 }
             }
             return $ormObject->id;
@@ -310,7 +328,6 @@ class Driver{
     }
 
     function prepare($sql, $bind): Amp\Promise{
-        var_dump($sql, $bind);
         return call(function()use ($sql, $bind){
             $statement = yield $this->db->prepare($sql);
             return yield $statement->execute($bind);
@@ -468,6 +485,7 @@ class OrmObject{
 
     function save(){
         $this->origin = array_merge($this->origin, $this->new_values);
+        $this->new_values = [];
     }
 }
 
