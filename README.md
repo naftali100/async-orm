@@ -4,7 +4,7 @@ async orm lib inspired by [redbean](https://redbeanphp.com)
 
 # usage
 
-almost the same as redbean
+almost the same as redbean. notice the `yield` every time you do db call
 
 ```php
 Amp\Loop::run(function(){
