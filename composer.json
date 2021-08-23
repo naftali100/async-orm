@@ -1,0 +1,6 @@
+{
+    "require": {
+        "amphp/amp": "^2.6",
+        "amphp/mysql": "^2.1"
+    }
+}
