@@ -8,6 +8,11 @@ use Amp\Mysql;
 use function Amp\call;
 
 class orm{
+    /**
+     * if true columns dont change 
+     */
+    public bool $freez = false;
+    
     function __construct(public $driver)
     {
     }
@@ -99,7 +104,8 @@ class orm{
             if($ormObject->getMeta('changed')){
                 $ormObject->setMeta('changed', false);
 
-                yield SchemaHelper::adjustToObj($ormObject, $this);
+                if(! $this->freez)
+                    yield SchemaHelper::adjustToObj($ormObject, $this);
 
                 $id = $ormObject->getOrigin('id');
                 $table = $ormObject->getMeta('type');
