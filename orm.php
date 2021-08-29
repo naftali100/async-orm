@@ -37,14 +37,17 @@ class orm{
     function load($table, $id)
     {
         return call(function() use($table,$id){
-            $res = yield $this->driver->getone($this->driver->prepare("SELECT * FROM $table WHERE id = ?", [$id]));
+            $res = yield $this->getone($this->driver->prepare("SELECT * FROM $table WHERE id = ?", [$id]));
             return new OrmObject($table, $res ?? []);
         });
     }
 
     /** reload ormObject from db */
     function reload($ormObject){
-        return $this->load($ormObject->getMeta('type'), $ormObject->id);
+        if($ormObject->id != 0)
+            return $this->load($ormObject->getMeta('type'), $ormObject->id);
+        else
+            return $ormObject;
     }
 
     // function find($table, $where, $data){
@@ -77,12 +80,12 @@ class orm{
     }
 
     function trash($ormObject){
-        return $this->driver->resultSetToArray($this->driver->prepare("DELETE FROM {$ormObject->getMeta('type')} WHERE id = ? ", [$ormObject->id]));
+        return $this->getone($this->driver->prepare("DELETE FROM {$ormObject->getMeta('type')} WHERE id = ? ", [$ormObject->id]));
     }
 
     function count($table, $where = '1', $bind = []){
         return call(function() use($table, $where, $bind){
-            $res = yield $this->driver->getone($this->driver->prepare("SELECT count(*) FROM $table WHERE $where ", $bind));
+            $res = yield $this->getone($this->driver->prepare("SELECT count(*) FROM $table WHERE $where ", $bind));
             return current($res);
         });
     }
@@ -96,7 +99,7 @@ class orm{
             if($ormObject->getMeta('changed')){
                 $ormObject->setMeta('changed', false);
 
-                yield SchemaHelper::adjustToObj($ormObject, $this->driver);
+                yield SchemaHelper::adjustToObj($ormObject, $this);
 
                 $id = $ormObject->getOrigin('id');
                 $table = $ormObject->getMeta('type');
@@ -104,7 +107,6 @@ class orm{
 
                 if ($ormObject->getMeta('created')) { // is created
                     $ormObject->setMeta('created', false);
-
 
                     $question = $this->question(count($changes));
                     $sql = "INSERT INTO {$table} (" . implode(', ', array_keys($changes)) . ") VALUES({$question}) ";
@@ -123,7 +125,7 @@ class orm{
                     $sql = rtrim($sql, ', ');
                     $sql .= " WHERE id = " . $id;
 
-                    $res = yield $this->driver->resultSetToArray($this->driver->prepare($sql, array_values($changes)));
+                    yield $this->driver->prepare($sql, array_values($changes));
                     $ormObject->save();
                     return $id; // return the id that updated
                 }
@@ -136,6 +138,112 @@ class orm{
     {
         // create array full of '?' and implode it with ','
         return implode(',', array_fill(0, $num, '?'));
+    }
+
+    /**
+     * utility functions
+     */
+
+    protected $SqlTemplates = array(
+        'addColumn' => 'ALTER TABLE %s ADD %s %s ',
+        'createTable' => 'CREATE TABLE %s (id INT( 11 ) UNSIGNED NOT NULL AUTO_INCREMENT, PRIMARY KEY ( id )) ENGINE = InnoDB ',
+        'widenColumn' => 'ALTER TABLE `%s` CHANGE %s %s %s '
+    );
+
+    function getTables(): Amp\Promise
+    {
+        return call(function () {
+            $res = [];
+            $tables = yield $this->resultSetToArray($this->driver->query('show tables'));
+            foreach ($tables as $table) {
+                $res[] = reset($table); // get the vaule 
+            }
+            return $res;
+        });
+    }
+
+    function addTable($type): Amp\Promise
+    {
+        return call(function () use ($type) {
+            if (in_array($type, yield $this->getTables())) {
+                return true;
+            }
+
+            $res = yield $this->resultSetToArray($this->driver->query(sprintf($this->SqlTemplates['createTable'], $type)));
+            if ($res == 0)
+                return true;
+            else
+                return false;
+        });
+    }
+
+    /**
+     * add column to table
+     * 
+     * @param string table the table name to add the column
+     * @param string col the column name to add
+     * @param string sql_type the type of the table in sql format (INT, TEXT, ect)
+     * 
+     * @yield 0 on success
+     */
+    function addCol(string $table, string $col, string $sql_type)
+    { 
+        return $this->getone($this->driver->query(sprintf($this->SqlTemplates['addColumn'], $table, $col, $sql_type)));
+    }
+
+    function getCols($table): Amp\Promise
+    {
+        return call(function () use ($table) {
+            $res = [];
+            $cols = yield $this->getFullCols($table);
+            foreach ($cols as $col) {
+                $res[$col['Field']] = $col['Type'];
+            }
+            return $res;
+        });
+    }
+
+    function getFullCols($table): Amp\Promise
+    {
+        return $this->resultSetToArray($this->driver->query("describe $table"));
+    }
+
+    function resultSetToArray($resultSet): Amp\Promise
+    {
+        return call(function () use ($resultSet) {
+            $result = [];
+
+            if ($resultSet instanceof Amp\Promise) {
+                $resultSet = yield $resultSet;
+            }
+            if ($resultSet instanceof Mysql\CommandResult) {
+                return $resultSet->getLastInsertId();
+            } 
+
+            while (yield $resultSet->advance()) {
+                $result[] = $resultSet->getCurrent();
+            }
+            return $result;
+        });
+    }
+
+    /**
+     * take resuleSet and return the first result 
+     */
+    function getOne($resultSet): Amp\Promise
+    {
+        return call(function () use ($resultSet) {
+            if ($resultSet instanceof Amp\Promise) {
+                $resultSet = yield $resultSet;
+            }
+            if ($resultSet instanceof Mysql\CommandResult) {
+                return $resultSet->getLastInsertId();
+            }
+
+            while (yield $resultSet->advance()) {
+                return $resultSet->getCurrent();
+            }
+        });
     }
 }
 
@@ -166,20 +274,20 @@ class SchemaHelper{
     /**
      * take ormObject and adjust the schema to fit the object.
      */
-    static function adjustToObj($obj, $driver): Amp\Promise{
-        return call(function() use($obj, $driver){
-            if (!in_array($obj->getMeta('type'), yield $driver->getTables())) {
-                yield $driver->addTable($obj->getMeta('type'));
+    static function adjustToObj($obj, $orm): Amp\Promise{
+        return call(function() use($obj, $orm){
+            if (!in_array($obj->getMeta('type'), yield $orm->getTables())) {
+                yield $orm->addTable($obj->getMeta('type'));
             }
 
             $changes = $obj->getChanges();
             $table = $obj->getMeta('type');
-            $cols = yield $driver->getCols($table);
+            $cols = yield $orm->getCols($table);
 
             if ([] != $diff = array_diff_key($changes, $cols)) {
                 $p = [];
                 foreach ($diff as $newColName => $data) {
-                    $p[] = $driver->addCol($table, $newColName, SchemaHelper::codeFromData($data, true));
+                    $p[] = $orm->addCol($table, $newColName, SchemaHelper::codeFromData($data, true));
                 }
                 yield $p;
             }
@@ -214,8 +322,6 @@ class SchemaHelper{
         );
         return $typeno_sqltype[$typeno];
     }
-
-
 
     // value to typeno
     public static function scanType($value, $flagSpecial = FALSE): int
@@ -304,12 +410,6 @@ class Driver{
     /** @var Mysql\Connection $db */
     private $db;
 
-    protected $SqlTemplates = array(
-        'addColumn' => 'ALTER TABLE %s ADD %s %s ',
-        'createTable' => 'CREATE TABLE %s (id INT( 11 ) UNSIGNED NOT NULL AUTO_INCREMENT, PRIMARY KEY ( id )) ENGINE = InnoDB ',
-        'widenColumn' => 'ALTER TABLE `%s` CHANGE %s %s %s '
-    );
-
     static function connect($string, $pool = false){
         return call(function() use($string, $pool){
             // $this->db = Mysql\pool(Mysql\ConnectionConfig::fromString($string));
@@ -334,93 +434,6 @@ class Driver{
         });
     }
 
-    function getTables(): Amp\Promise 
-    {
-        return call(function () {
-            $res = [];
-            $tables = yield $this->resultSetToArray($this->query('show tables'));
-            foreach ($tables as $table) {
-                $res[] = reset($table);
-            }
-            return $res;
-        });
-    }
-
-    function addTable($type): Amp\Promise 
-    {
-        return call(function () use ($type) {
-            if (in_array($type, yield $this->getTables())) {
-                return true;
-            }
-
-            $res = yield $this->resultSetToArray($this->query(sprintf($this->SqlTemplates['createTable'], $type)));
-            if($res == 0)
-                return true;
-            else
-                return false;
-        });
-    }
-
-    function addCol($table, $col, $sql_type){ // cange to result and not CommandSet
-        return $this->query(sprintf($this->SqlTemplates['addColumn'], $table, $col, $sql_type));
-    }
-
-    function getCols($table): Amp\Promise
-    {
-        return call(function() use($table){
-            $res = [];
-            $cols = yield $this->getFullCols($table);
-            foreach($cols as $col){
-                $res[$col['Field']] = $col['Type'];
-            }
-            return $res;
-        });
-    }
-
-    function getFullCols($table): Amp\Promise
-    {
-        return $this->resultSetToArray($this->query("describe $table"));
-    }
-
-    function resultSetToArray($resultSet): Amp\Promise
-    {
-        return call(function () use ($resultSet) {
-            $result = [];
-
-            if ($resultSet instanceof Amp\Promise) {
-                $resultSet = yield $resultSet;
-            }
-            if ($resultSet instanceof Mysql\CommandResult) {
-                return $resultSet->getLastInsertId();
-            } elseif ($resultSet instanceof Mysql\ConnectionResultSet) {
-                $set = $resultSet;
-            }
-
-            while (yield $set->advance()) {
-                $result[] = $set->getCurrent();
-            }
-            return $result;
-        });
-    }
-
-    function getOne($resultSet): Amp\Promise
-    {
-        return call(function () use ($resultSet) {
-            if($resultSet instanceof Amp\Promise){
-                $resultSet = yield $resultSet;
-            }
-            if ($resultSet instanceof Mysql\CommandResult) {
-                return $resultSet->getLastInsertId();
-            } elseif ($resultSet instanceof Mysql\ConnectionResultSet) {
-                $set = $resultSet;
-            }
-
-            while (yield $set->advance()) {
-                return $set->getCurrent();
-            }
-        });
-    }
-
     function __destruct()
     {
         $this->db->close();
@@ -436,7 +449,7 @@ class OrmObject{
     function __construct($type, array $data = []){
         $this->__info['type'] = $type;
         $this->__info['created'] = !isset($data['id']); // if obj has id - its alredy exist in db
-        if($this->__info['created']) $data['id'] = 0; //TODO: test this!!
+        if($this->__info['created']) $data['id'] = 0;
         $this->origin = $data;
     }
 
@@ -494,6 +507,7 @@ Amp\Loop::run(function(){
 
     $user = $db->create('user');
     $user->name = 'jon';
+    $user->age = 30;
     $userid = yield $db->store($user);
 
     $same_user = yield $db->load('user', $userid);
