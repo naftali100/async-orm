@@ -287,7 +287,9 @@ class SchemaHelper{
             if ([] != $diff = array_diff_key($changes, $cols)) {
                 $p = [];
                 foreach ($diff as $newColName => $data) {
-                    $p[] = $orm->addCol($table, $newColName, SchemaHelper::codeFromData($data, true));
+                    $sql_type = SchemaHelper::codeFromData($data, true);
+                    var_dump('adding new col of type', $sql_type);
+                    $p[] = $orm->addCol($table, $newColName, $sql_type);
                 }
                 yield $p;
             }
@@ -388,9 +390,12 @@ class SchemaHelper{
 
     static function isJSON($value): bool
     {
-        return (is_string($value) &&
+        $res = (is_string($value) &&
             is_array(json_decode($value, TRUE)) &&
             (json_last_error() == JSON_ERROR_NONE));
+        var_dump('json test', $value, $res);
+        
+        return $res;
     }
 
     protected static function startsWithZeros($value): bool
@@ -462,11 +467,15 @@ class OrmObject{
     }
 
     function __set($key, $value){
+        if (gettype($value) == 'array')
+            $value = json_encode($value);
+
         $this->new_values[$key] = $value;
-        if(isset($this->origin[$key])){
-            if($value != $this->origin[$key])
+
+        if (isset($this->origin[$key])) {
+            if ($value != $this->origin[$key])
                 $this->__info['changed'] = true;
-        }else
+        } else
             $this->__info['changed'] = true;
     }
 
@@ -508,6 +517,7 @@ Amp\Loop::run(function(){
     $user = $db->create('user');
     $user->name = 'jon';
     $user->age = 30;
+    $user->data = ['sity' => 'NY', 'hight' => 45];
     $userid = yield $db->store($user);
 
     $same_user = yield $db->load('user', $userid);
