@@ -13,8 +13,18 @@ class orm{
      */
     public bool $freez = false;
     
-    function __construct(public $driver)
+    function __construct(private Mysql\Connection $db)
     {
+    }
+
+    function __destruct()
+    {
+        $this->db->close();
+    }
+
+    function execute($sql, $bind): Amp\Promise
+    {
+        return $this->db->execute($sql, $bind);
     }
 
     /**
@@ -24,8 +34,9 @@ class orm{
      */
     static function connect($host, $user, $pass, $db){
         return call(function() use($host, $user, $pass, $db){
-            $driver = yield Driver::connect("host=$host;user=$user;pass=$pass;db=$db");
-            return new self($driver);
+            $config = Mysql\ConnectionConfig::fromString("host=$host;user=$user;pass=$pass;db=$db");
+            $db = yield Mysql\connect($config);
+            return new self($db);
         });
     }
 
@@ -42,7 +53,7 @@ class orm{
     function load($table, $id)
     {
         return call(function() use($table,$id){
-            $res = yield $this->getone($this->driver->prepare("SELECT * FROM $table WHERE id = ?", [$id]));
+            $res = yield $this->getone($this->db->execute("SELECT * FROM $table WHERE id = ?", [$id]));
             return new OrmObject($table, $res ?? []);
         });
     }
@@ -55,11 +66,15 @@ class orm{
             return $ormObject;
     }
 
-    // function find($table, $where, $data){
-    //     call(function() use($table, $where, $data){
-    //         yield from $this->driver->prepare("SELECT * FROM $table WHERE $where", $data);
-    //     });
-    // }
+    function find($table, $where = '1', $data = []){
+        return call(function() use($table, $where, $data) {
+            $res = [];
+            foreach (yield $this->resultSetToArray($this->db->execute("SELECT * FROM $table WHERE $where", $data)) as $result) {
+                $res[] = new OrmObject($table, $result);
+            }
+            return $res;
+        });
+    }
 
     /**
      * fine one row in $table 
@@ -73,24 +88,20 @@ class orm{
      * @return Amp\Promise<ormObject>|null */
     function findone($table, $where = '1', $data = []){
         return call(function () use ($table, $where, $data) {
-            $return_value = null;
-
-            $result = yield $this->driver->prepare("SELECT * FROM $table WHERE $where LIMIT 1", $data);
-            while(yield $result->advance()){
-                return new OrmObject($table, $result->getCurrent());
-            }
-            return $return_value;
-
+            $result = yield $this->getone($this->db->execute("SELECT * FROM $table WHERE $where LIMIT 1", $data));
+            if($result)
+                return new OrmObject($table, $result);
+            return null;
         });
     }
 
     function trash($ormObject){
-        return $this->getone($this->driver->prepare("DELETE FROM {$ormObject->getMeta('type')} WHERE id = ? ", [$ormObject->id]));
+        return $this->getone($this->db->execute("DELETE FROM {$ormObject->getMeta('type')} WHERE id = ? ", [$ormObject->id]));
     }
 
     function count($table, $where = '1', $bind = []){
         return call(function() use($table, $where, $bind){
-            $res = yield $this->getone($this->driver->prepare("SELECT count(*) FROM $table WHERE $where ", $bind));
+            $res = yield $this->getone($this->db->execute("SELECT count(*) FROM $table WHERE $where ", $bind));
             return current($res);
         });
     }
@@ -98,8 +109,15 @@ class orm{
     /**
      * store object in database and also update the schema if nedded
      */
-    function store($ormObject): Amp\Promise
+    function store($ormObject): Amp\Promise|array
     {
+        if(gettype($ormObject) == 'array'){
+            $p = [];
+            foreach($ormObject as $obj){
+                $p[] = $this->store($obj);
+            }
+            return $p;
+        }
         return call(function () use($ormObject){
             if($ormObject->getMeta('changed')){
                 $ormObject->setMeta('changed', false);
@@ -107,36 +125,47 @@ class orm{
                 if(! $this->freez)
                     yield SchemaHelper::adjustToObj($ormObject, $this);
 
-                $id = $ormObject->getOrigin('id');
-                $table = $ormObject->getMeta('type');
-                $changes = $ormObject->getChanges();
-
-                if ($ormObject->getMeta('created')) { // is created
-                    $ormObject->setMeta('created', false);
-
-                    $question = $this->question(count($changes));
-                    $sql = "INSERT INTO {$table} (" . implode(', ', array_keys($changes)) . ") VALUES({$question}) ";
-
-                    $res = yield $this->driver->prepare($sql, array_values($changes));
-                    $ormObject->id = $res->getLastInsertId();
-                    $ormObject->save();
-                    return $ormObject->id;
-
+                if ($ormObject->getMeta('created')) { 
+                    yield $this->store_new_orm($ormObject);  
                 } else { // its updated
-
-                    $sql = "UPDATE {$table} SET ";
-                    foreach ($changes as $key => $value) {
-                        $sql .= $key . ' = ?, ';
-                    }
-                    $sql = rtrim($sql, ', ');
-                    $sql .= " WHERE id = " . $id;
-
-                    yield $this->driver->prepare($sql, array_values($changes));
-                    $ormObject->save();
-                    return $id; // return the id that updated
+                    $this->update_orm($ormObject);
                 }
+                $ormObject->save();
             }
             return $ormObject->id;
+        });
+    }
+
+    private function store_new_orm($ormObject){
+        return call(function() use($ormObject){
+            $ormObject->setMeta('created', false);
+
+            $table = $ormObject->getMeta('type');
+            $changes = $ormObject->getChanges();
+
+            $question = $this->question(count($changes));
+            $sql = "INSERT INTO {$table} (" . implode(', ', array_keys($changes)) . ") VALUES({$question}) ";
+
+            $res = yield $this->db->execute($sql, array_values($changes));
+            $ormObject->id = $res->getLastInsertId();
+            return $ormObject->id;
+        });
+    }
+
+    private function update_orm($ormObject){
+        return call(function() use($ormObject){
+            $id = $ormObject->getOrigin('id');
+            $table = $ormObject->getMeta('type');
+            $changes = $ormObject->getChanges();
+
+            $sql = "UPDATE {$table} SET ";
+            foreach ($changes as $key => $value) {
+                $sql .= $key . ' = ?, ';
+            }
+            $sql = rtrim($sql, ', ');
+            $sql .= " WHERE id = " . $id;
+
+            yield $this->db->execute($sql, array_values($changes));
         });
     }
 
@@ -160,7 +189,7 @@ class orm{
     {
         return call(function () {
             $res = [];
-            $tables = yield $this->resultSetToArray($this->driver->query('show tables'));
+            $tables = yield $this->resultSetToArray($this->db->query('show tables'));
             foreach ($tables as $table) {
                 $res[] = reset($table); // get the vaule 
             }
@@ -175,7 +204,7 @@ class orm{
                 return true;
             }
 
-            $res = yield $this->resultSetToArray($this->driver->query(sprintf($this->SqlTemplates['createTable'], $type)));
+            $res = yield $this->resultSetToArray($this->db->query(sprintf($this->SqlTemplates['createTable'], $type)));
             if ($res == 0)
                 return true;
             else
@@ -194,7 +223,7 @@ class orm{
      */
     function addCol(string $table, string $col, string $sql_type)
     { 
-        return $this->getone($this->driver->query(sprintf($this->SqlTemplates['addColumn'], $table, $col, $sql_type)));
+        return $this->getone($this->db->query(sprintf($this->SqlTemplates['addColumn'], $table, $col, $sql_type)));
     }
 
     function getCols($table): Amp\Promise
@@ -211,7 +240,7 @@ class orm{
 
     function getFullCols($table): Amp\Promise
     {
-        return $this->resultSetToArray($this->driver->query("describe $table"));
+        return $this->resultSetToArray($this->db->query("describe $table"));
     }
 
     function resultSetToArray($resultSet): Amp\Promise
@@ -294,7 +323,6 @@ class SchemaHelper{
                 $p = [];
                 foreach ($diff as $newColName => $data) {
                     $sql_type = SchemaHelper::codeFromData($data, true);
-                    var_dump('adding new col of type', $sql_type);
                     $p[] = $orm->addCol($table, $newColName, $sql_type);
                 }
                 yield $p;
@@ -392,19 +420,16 @@ class SchemaHelper{
         }
 
         return self::C_DATATYPE_TEXT32;
-    }   
-
-    static function isJSON($value): bool
-    {
-        $res = (is_string($value) &&
-            is_array(json_decode($value, TRUE)) &&
-            (json_last_error() == JSON_ERROR_NONE));
-        var_dump('json test', $value, $res);
-        
-        return $res;
     }
 
-    protected static function startsWithZeros($value): bool
+    private static function isJSON($value): bool
+    {
+        return (is_string($value) &&
+            is_array(json_decode($value, TRUE)) &&
+            (json_last_error() == JSON_ERROR_NONE));        
+    }
+
+    private static function startsWithZeros($value): bool
     {
         $value = strval($value);
 
@@ -416,46 +441,10 @@ class SchemaHelper{
     }
 }
 
-
-class Driver{
-    /** @var Mysql\Connection $db */
-    private $db;
-
-    static function connect($string, $pool = false){
-        return call(function() use($string, $pool){
-            // $this->db = Mysql\pool(Mysql\ConnectionConfig::fromString($string));
-            $config = Mysql\ConnectionConfig::fromString($string);
-            $db = yield Mysql\connect($config);
-            return new self($db);
-        });
-    }
-
-    function __construct(Mysql\Connection $db){
-        $this->db = $db;
-    }
-
-    function query($sql): Amp\Promise{
-        return $this->db->query($sql);
-    }
-
-    function prepare($sql, $bind): Amp\Promise{
-        return call(function()use ($sql, $bind){
-            $statement = yield $this->db->prepare($sql);
-            return yield $statement->execute($bind);
-        });
-    }
-
-    function __destruct()
-    {
-        $this->db->close();
-    }
-}
-
 class OrmObject{
     private $__info = [];
     private $origin;
     private $new_values;
-    private $diff;
 
     function __construct($type, array $data = []){
         $this->__info['type'] = $type;
@@ -529,4 +518,10 @@ Amp\Loop::run(function(){
     $same_user = yield $db->load('user', $userid);
     print $same_user->id; // id
     print $same_user->name; // jon
+
+    $res = yield $db->find('user', 'name is null');
+    foreach($res as $user){
+        $user->name = 'new name';
+    }
+    yield $db->store($res);
 });
