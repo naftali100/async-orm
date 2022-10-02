@@ -10,21 +10,10 @@ use Amp\PHPUnit\AsyncTestCase;
 final class ConnectionTest extends AsyncTestCase
 {
 
-    protected function setUpAsync()
+     function testConnection()
     {
         yield ORM::connect('localhost', 'naftali', 'linux1221', 'telegram');
         $this->assertTrue(ORM::isReady());
-    }
-
-    protected function tearDownAsync(){
-        // Amp\PHPUnit\AsyncTestCase::setTimeout(1); // for destructor to complete
-    }
-
-    public function testQuery(){
-        $user = ORM::create('user');
-        $user->name2 = 'john';
-        $res = yield ORM::store($user);
-        $this->assertIsNumeric($res);
     }
 }
 
