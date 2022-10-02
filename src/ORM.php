@@ -9,6 +9,7 @@ use Amp\Mysql;
 use Amp\Cache\ArrayCache;
 use Amp\Cache\SerializedCache;
 use Amp\Serialization\NativeSerializer;
+use Amp\Success;
 
 use function Amp\call;
 
@@ -87,7 +88,7 @@ class ORM
     /** 
      * load row by id 
      */
-    function load($table, $id)
+    static function load($table, $id)
     {
         return call(function () use ($table, $id) {
             $res = yield Internal::getOneFromSet(self::execute("SELECT * FROM $table WHERE id = ?", [$id]));
@@ -96,12 +97,12 @@ class ORM
     }
 
     /** reload ormObject from db */
-    function reload($ormObject)
+    static function reload($ormObject)
     {
         if ($ormObject->id != 0) {
-            return $this->load($ormObject->getMeta('type'), $ormObject->id);
+            return self::load($ormObject->getMeta('type'), $ormObject->id);
         } else {
-            return $ormObject;
+            return new Success($ormObject);
         }
     }
 
@@ -144,11 +145,8 @@ class ORM
 
     static function count($table, $where = '1', $bind = [])
     {
-
         return call(function () use ($table, $where, $bind) {
             return count(yield self::find($table, $where, $bind));
-            // $res = yield $this->getone(self::execute("SELECT count(*) FROM $table WHERE $where ", $bind));
-            // return current($res);
         });
     }
 
@@ -168,13 +166,14 @@ class ORM
             if ($ormObject->getMeta('changed')) {
                 $ormObject->setMeta('changed', false);
 
-                if (!self::$freeze)
+                if (!self::$freeze) {
                     yield self::adjustToObj($ormObject);
+                }
 
                 if ($ormObject->getMeta('created')) {
                     yield self::store_new_orm($ormObject);
                 } else { // its updated
-                    self::update_orm($ormObject);
+                    yield self::update_orm($ormObject);
                 }
                 $ormObject->save();
             }
@@ -199,7 +198,7 @@ class ORM
         });
     }
 
-    private function update_orm($ormObject)
+    private static function update_orm($ormObject)
     {
         return call(function () use ($ormObject) {
             $id = $ormObject->getOrigin('id');
@@ -213,7 +212,7 @@ class ORM
             $sql = rtrim($sql, ', ');
             $sql .= " WHERE id = " . $id;
 
-            yield $this->db->execute($sql, array_values($changes));
+            yield self::execute($sql, array_values($changes));
         });
     }
 
@@ -233,9 +232,7 @@ class ORM
     private static function adjustToObj($obj): Amp\Promise
     {
         return call(function () use ($obj) {
-            if (!in_array($obj->getMeta('type'), yield self::getTables())) {
-                yield self::addTable($obj->getMeta('type'));
-            }
+            yield self::addTable($obj->getMeta('type')); // ignores if table already exist
 
             $changes = $obj->getChanges();
             $table = $obj->getMeta('type');
@@ -256,7 +253,8 @@ class ORM
     private static function getTables(): Amp\Promise
     {
         return call(function () {
-            if ($tables = (yield self::$cache->get('tables')) != null) {
+            $tables = yield self::$cache->get('tables');
+            if ($tables != null) {
                 return $tables;
             }
             $res = [];
@@ -264,7 +262,7 @@ class ORM
             foreach ($tables as $table) {
                 $res[] = reset($table); // get the value 
             }
-            self::$cache->set('tables', $res);
+            yield self::$cache->set('tables', $res);
             return $res;
         });
     }
@@ -272,13 +270,14 @@ class ORM
     private static function addTable($type): Amp\Promise
     {
         return call(function () use ($type) {
-            if (in_array($type, yield $this->getTables())) {
+            $tables = yield self::getTables();
+            if (in_array($type, $tables)) {
                 return true;
             }
 
             yield self::$cache->delete('tables');
 
-            $res = yield Internal::resultSetToArray($this->db->query(sprintf($this->SqlTemplates['createTable'], $type)));
+            $res = yield Internal::resultSetToArray(self::query(sprintf(self::$SqlTemplates['createTable'], $type)));
             return $res == 0;
         });
     }
@@ -295,7 +294,13 @@ class ORM
     private static function addCol(string $table, string $col, string $sql_type)
     {
         return call(function () use ($table, $col, $sql_type) {
+            $cols = yield self::getCols($table);
+            if (in_array($col, $cols)) {
+                return true;
+            }
+
             yield self::$cache->delete($table . '__cols');
+
             return Internal::getOneFromSet(self::query(sprintf(self::$SqlTemplates['addColumn'], $table, $col, $sql_type)));
         });
     }
@@ -303,7 +308,8 @@ class ORM
     private static function getCols($table): Amp\Promise
     {
         return call(function () use ($table) {
-            if ($cols = (yield self::$cache->get($table . '__cols')) != null) {
+            $cols = yield self::$cache->get($table . '__cols');
+            if ($cols != null) {
                 return $cols;
             }
             $res = [];
@@ -312,7 +318,7 @@ class ORM
                 $res[$col['Field']] = $col['Type'];
             }
 
-            self::$cache->set($table . '__cols', $res);
+            yield self::$cache->set($table . '__cols', $res);
             return $res;
         });
     }
