@@ -12,7 +12,7 @@ final class ConnectionTest extends AsyncTestCase
 
      function testConnection()
     {
-        yield ORM::connect('localhost', 'naftali', 'linux1221', 'telegram');
+        yield ORM::connect('localhost', 'user', 'pass', 'db');
         $this->assertTrue(ORM::isReady());
     }
 }
