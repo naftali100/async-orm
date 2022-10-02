@@ -27,10 +27,7 @@ class SchemaHelper
     const C_DATATYPE_SPECIAL_MONEY      = 93;
     const C_DATATYPE_SPECIAL_JSON       = 94;  //JSON support (only manual)
 
-    const C_DATATYPE_SPECIFIED        = 99;
-
-
-   
+    const C_DATATYPE_SPECIFIED        = 99;   
 
     /** get sql type from data */
     static function codeFromData($data, $s)
