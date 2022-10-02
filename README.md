@@ -8,13 +8,13 @@ almost the same as redbean. notice the `yield` every time you do db call
 
 ```php
 Amp\Loop::run(function(){
-    $db = yield orm::connect('127.0.0.1', 'user', 'pass', 'db');
+    yield ORM::connect('127.0.0.1', 'user', 'pass', 'db');
 
-    $user = $db->create('user');
+    $user = ORM::create('user');
     $user->name = 'jon';
-    $userid = yield $db->store($user);
+    $userid = yield ROM::store($user);
 
-    $same_user = yield $db->load('user', $userid);
+    $same_user = yield ORM::load('user', $userid);
     print $same_user->id; // id
     print $same_user->name; // jon
 });
@@ -22,6 +22,6 @@ Amp\Loop::run(function(){
 
 ## todo
 
+- [ V ] tests
 - [ ] relations
-- [ ] fix stracture
-- [ ] tests
+- [ ] fix structure
