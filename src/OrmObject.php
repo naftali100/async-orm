@@ -1,6 +1,6 @@
 <?php
 
-namespace async_orm;
+namespace AsyncOrm;
 
 /**
  * represent one row in db
@@ -8,7 +8,7 @@ namespace async_orm;
 class OrmObject
 {
     private $__info = [];
-    private $origin;
+    private $properties;
     private $new_values;
 
     function __construct($type, array $data = [])
@@ -18,7 +18,7 @@ class OrmObject
         if ($this->__info['created']) {
             $data['id'] = 0;
         }
-        $this->origin = $data;
+        $this->properties = $data;
     }
 
     function __get($key)
@@ -27,8 +27,8 @@ class OrmObject
             return $this->new_values[$key];
         }
 
-        if (isset($this->origin[$key])) {
-            return $this->origin[$key];
+        if (isset($this->properties[$key])) {
+            return $this->properties[$key];
         }
     }
 
@@ -40,8 +40,8 @@ class OrmObject
 
         $this->new_values[$key] = $value;
 
-        if (isset($this->origin[$key])) {
-            if ($value != $this->origin[$key]) {
+        if (isset($this->properties[$key])) {
+            if ($value != $this->properties[$key]) {
                 $this->__info['changed'] = true;
             }
         } else {
@@ -74,15 +74,16 @@ class OrmObject
         $this->__info[$type] = $value;
     }
 
-    function getOrigin($key)
+    public function getProperty($key)
     {
-        if (isset($this->origin[$key]))
-            return $this->origin[$key];
+        if (isset($this->properties[$key])){
+            return $this->properties[$key];
+        }
     }
 
     function save()
     {
-        $this->origin = array_merge($this->origin, $this->new_values);
+        $this->properties = array_merge($this->properties, $this->new_values);
         $this->new_values = [];
     }
 
@@ -92,5 +93,10 @@ class OrmObject
 
     function store(){
         return ORM::store($this);
+    }
+
+    public function reload()
+    {
+        return ORM::load($this->getMeta('type'), $this->getProperty('id'));
     }
 }
