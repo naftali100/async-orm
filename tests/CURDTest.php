@@ -34,6 +34,13 @@ final class CURDTest extends AsyncTestCase
         $this->assertNotEmpty($res);
         $this->assertInstanceOf(OrmObject::class, $res[0]);
     }
+    function testFindOne()
+    {
+        $res = yield ORM::findOne('user', 'name =?', ['john']);
+        $this->assertNotEmpty($res);
+        $this->assertInstanceOf(OrmObject::class, $res);
+        $this->assertEquals('john', $res->name);
+    }
     function testLoad()
     {
         $res = yield ORM::load('user', 1);

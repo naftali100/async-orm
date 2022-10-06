@@ -2,10 +2,6 @@
 
 namespace AsyncOrm;
 
-require_once __DIR__ . '/rb.php';
-
-use \R;
-
 use AsyncOrm\Driver\MysqlDriver;
 use AsyncOrm\Driver;
 
@@ -33,7 +29,7 @@ class ORM
         });
     }
 
-    public static function selectDb($name)
+    public static function selectDB($name)
     {
         if (isset(self::$drivers[$name])) {
             self::$currentDriver = self::$drivers[$name];
@@ -71,6 +67,12 @@ class ORM
     public static function findOne($type, $where = '1', $bindings = [])
     {
         return self::$currentDriver->findOne($type, $where, $bindings);
+    }
+    public static function findOneOrCreate($type, $where = '1', $bindings = []){
+        return call(function() use($type, $where , $bindings){
+            $res = yield self::findOne($type, $where, $bindings);
+            return $res ?? new OrmObject('type');
+        });
     }
 
     public static function store($ormObj)
