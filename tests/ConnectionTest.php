@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
-use async_orm\ORM;
+use AsyncOrm\ORM;
 use Amp\PHPUnit\AsyncTestCase;
 
 final class ConnectionTest extends AsyncTestCase
