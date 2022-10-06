@@ -1,6 +1,6 @@
 <?php
 
-namespace async_orm;
+namespace AsyncOrm;
 
 use Amp;
 use function Amp\call;
