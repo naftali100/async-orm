@@ -1,330 +1,90 @@
 <?php
 
-namespace async_orm;
+namespace AsyncOrm;
 
-require 'vendor/autoload.php';
+require_once __DIR__ . '/rb.php';
 
-use Amp;
-use Amp\Mysql;
-use Amp\Cache\ArrayCache;
-use Amp\Cache\SerializedCache;
-use Amp\Serialization\NativeSerializer;
-use Amp\Success;
+use \R;
+
+use AsyncOrm\Driver\MysqlDriver;
+use AsyncOrm\Driver;
 
 use function Amp\call;
 
 class ORM
 {
     /**
-     * if true columns don't change 
+     * @var Driver[]
      */
-    private static bool $freeze = false;
+    private static $drivers;
 
     /**
-     * @var Amp\Mysql\Connection
+     * @var Driver
      */
-    private static $s_db;
-
-    /**
-     * @var Amp\Cache\SerializedCache
-     */
-    private static $cache;
-
-    function __destruct()
-    {
-
-        return $this->db->close();
-    }
-
-    static function isReady(): bool
-    {
-        return self::$s_db->isReady() && self::$s_db->isAlive();
-    }
-
-    static function execute($sql, $bind): Amp\Promise
-    {
-        if (self::isReady()) {
-            return self::$s_db->execute($sql, $bind);
-        } else {
-            throw new \Error('not ready');
-        }
-    }
-    static function query($sql): Amp\Promise
-    {
-        if (self::isReady()) {
-            return self::$s_db->query($sql);
-        } else {
-            throw new \Error('not ready');
-        }
-    }
+    private static $currentDriver;
 
     /**
      * init the connection
      */
-    static function connect($host, $user, $pass, $db)
+    public static function connect($host, $user, $pass, $db, $dbName = null)
     {
-        return self::connectFromString("host=$host;user=$user;pass=$pass;db=$db");
+        return call(function () use ($host, $user, $pass, $db, $dbName) {
+            self::$currentDriver = self::$drivers[$dbName ?? $db] = yield MysqlDriver::createDriver($host, $user, $pass, $db);
+        });
     }
 
-    static function connectFromString(string $string)
+    public static function selectDb($name)
     {
-        return call(function () use ($string) {
-            $config = Mysql\ConnectionConfig::fromString($string);
-            self::$s_db = yield Mysql\connect($config);
-            // https://stackoverflow.com/a/804089/12893054
-            // maybe change NativeSerializer to JsonSerializer
-            self::$cache = new SerializedCache(new ArrayCache(), new NativeSerializer());
-        });
+        if (isset(self::$drivers[$name])) {
+            self::$currentDriver = self::$drivers[$name];
+        } else {
+            throw new \Error('db name: "' . $name . '" not exist');
+        }
+    }
+
+    public static function isReady(): bool
+    {
+        return self::$currentDriver->isReady();
     }
 
     /**
      * create empty row in $table that can be stored later in db
      */
-    static function create($table): OrmObject
+    public static function create($table): OrmObject
     {
         return new OrmObject($table);
     }
 
-    /** 
-     * load row by id 
-     */
-    static function load($table, $id)
+    public static function load($type, $id)
     {
-        return call(function () use ($table, $id) {
-            $res = yield Internal::getOneFromSet(self::execute("SELECT * FROM $table WHERE id = ?", [$id]));
-            return new OrmObject($table, $res ?? []);
-        });
-    }
-
-    /** reload ormObject from db */
-    static function reload($ormObject)
-    {
-        if ($ormObject->id != 0) {
-            return self::load($ormObject->getMeta('type'), $ormObject->id);
-        } else {
-            return new Success($ormObject);
-        }
-    }
-
-    static function find($table, $where = '1', $bindings = [])
-    {
-        return call(function () use ($table, $where, $bindings) {
-            $res = [];
-            foreach (yield Internal::resultSetToArray(self::execute("SELECT * FROM $table WHERE $where", $bindings)) as $result) {
-                $res[] = new OrmObject($table, $result);
-            }
-            return $res;
-        });
+        return self::$currentDriver->load($type, $id);
     }
 
     /**
-     * fine one row in $table 
-     * 
-     * @param string $table  the table to query
-     * @param string $where  added sql after 'WHERE'
-     * @param array $data args to bind to the query
-     * 
-     * @throw Amp\Sql\QueryError if table or column not exist
-     * 
-     * @return Amp\Promise<ormObject>|null */
-    static function findOne($table, $where = '1', $bindings = [])
-    {
-        return call(function () use ($table, $where, $bindings) {
-            $result = yield Internal::getOneFromSet($this->db->execute("SELECT * FROM $table WHERE $where LIMIT 1", $bindings));
-            if ($result) {
-                return new OrmObject($table, $result);
-            }
-            return null;
-        });
-    }
-
-    static function trash($ormObject)
-    {
-        return Internal::getOneFromSet(self::execute("DELETE FROM {$ormObject->getMeta('type')} WHERE id = ? ", [$ormObject->id]));
-    }
-
-    static function count($table, $where = '1', $bind = [])
-    {
-        return call(function () use ($table, $where, $bind) {
-            return count(yield self::find($table, $where, $bind));
-        });
-    }
-
-    /**
-     * store object in database and also update the schema if nedded
+     * @return Promise<OrmObject>
      */
-    static function store($ormObject): Amp\Promise|array
+    public static function find($type, $where = '1', $bindings = [])
     {
-        if (gettype($ormObject) == 'array') {
-            $p = [];
-            foreach ($ormObject as $obj) {
-                $p[] = self::store($obj);
-            }
-            return $p;
-        }
-        return call(function () use ($ormObject) {
-            if ($ormObject->getMeta('changed')) {
-                $ormObject->setMeta('changed', false);
-
-                if (!self::$freeze) {
-                    yield self::adjustToObj($ormObject);
-                }
-
-                if ($ormObject->getMeta('created')) {
-                    yield self::store_new_orm($ormObject);
-                } else { // its updated
-                    yield self::update_orm($ormObject);
-                }
-                $ormObject->save();
-            }
-            return $ormObject->id;
-        });
+        return self::$currentDriver->find($type, $where, $bindings);
     }
 
-    private static function store_new_orm($ormObject)
+    public static function findOne($type, $where = '1', $bindings = [])
     {
-        return call(function () use ($ormObject) {
-            $ormObject->setMeta('created', false);
-
-            $table = $ormObject->getMeta('type');
-            $changes = $ormObject->getChanges();
-
-            $question = Internal::question(count($changes));
-            $sql = "INSERT INTO {$table} (" . implode(', ', array_keys($changes)) . ") VALUES({$question}) ";
-
-            $res = yield self::execute($sql, array_values($changes));
-            $ormObject->id = $res->getLastInsertId();
-            return $ormObject->id;
-        });
+        return self::$currentDriver->findOne($type, $where, $bindings);
     }
 
-    private static function update_orm($ormObject)
+    public static function store($ormObj)
     {
-        return call(function () use ($ormObject) {
-            $id = $ormObject->getOrigin('id');
-            $table = $ormObject->getMeta('type');
-            $changes = $ormObject->getChanges();
-
-            $sql = "UPDATE {$table} SET ";
-            foreach ($changes as $key => $value) {
-                $sql .= $key . ' = ?, ';
-            }
-            $sql = rtrim($sql, ', ');
-            $sql .= " WHERE id = " . $id;
-
-            yield self::execute($sql, array_values($changes));
-        });
+        return self::$currentDriver->store($ormObj);
     }
 
-    /**
-     * utility functions
-     */
-
-    protected static $SqlTemplates = array(
-        'addColumn' => 'ALTER TABLE %s ADD %s %s ',
-        'createTable' => 'CREATE TABLE %s (id INT( 11 ) UNSIGNED NOT NULL AUTO_INCREMENT, PRIMARY KEY ( id )) ENGINE = InnoDB ',
-        'widenColumn' => 'ALTER TABLE `%s` CHANGE %s %s %s '
-    );
-
-    /**
-     * take ormObject and adjust the schema to fit the object.
-     */
-    private static function adjustToObj($obj): Amp\Promise
+    public static function trash($ormObj)
     {
-        return call(function () use ($obj) {
-            yield self::addTable($obj->getMeta('type')); // ignores if table already exist
-
-            $changes = $obj->getChanges();
-            $table = $obj->getMeta('type');
-            $cols = yield self::getCols($table);
-
-            if ([] != $diff = array_diff_key($changes, $cols)) {
-                $p = [];
-                foreach ($diff as $newColName => $data) {
-                    $sql_type = SchemaHelper::codeFromData($data, true);
-                    $p[] = self::addCol($table, $newColName, $sql_type);
-                }
-                yield $p;
-            }
-            // TODO: check if need to width
-        });
+        return self::$currentDriver->trash($ormObj);
     }
 
-    private static function getTables(): Amp\Promise
+    public static function count($type, $where = '1', $bindings = [])
     {
-        return call(function () {
-            $tables = yield self::$cache->get('tables');
-            if ($tables != null) {
-                return $tables;
-            }
-            $res = [];
-            $tables = yield Internal::resultSetToArray(self::query('show tables'));
-            foreach ($tables as $table) {
-                $res[] = reset($table); // get the value 
-            }
-            yield self::$cache->set('tables', $res);
-            return $res;
-        });
-    }
-
-    private static function addTable($type): Amp\Promise
-    {
-        return call(function () use ($type) {
-            $tables = yield self::getTables();
-            if (in_array($type, $tables)) {
-                return true;
-            }
-
-            yield self::$cache->delete('tables');
-
-            $res = yield Internal::resultSetToArray(self::query(sprintf(self::$SqlTemplates['createTable'], $type)));
-            return $res == 0;
-        });
-    }
-
-    /**
-     * add column to table
-     * 
-     * @param string table the table name to add the column
-     * @param string col the column name to add
-     * @param string sql_type the type of the table in sql format (INT, TEXT, ect)
-     * 
-     * @yield 0 on success
-     */
-    private static function addCol(string $table, string $col, string $sql_type)
-    {
-        return call(function () use ($table, $col, $sql_type) {
-            $cols = yield self::getCols($table);
-            if (in_array($col, $cols)) {
-                return true;
-            }
-
-            yield self::$cache->delete($table . '__cols');
-
-            return Internal::getOneFromSet(self::query(sprintf(self::$SqlTemplates['addColumn'], $table, $col, $sql_type)));
-        });
-    }
-
-    private static function getCols($table): Amp\Promise
-    {
-        return call(function () use ($table) {
-            $cols = yield self::$cache->get($table . '__cols');
-            if ($cols != null) {
-                return $cols;
-            }
-            $res = [];
-            $cols = yield self::getFullCols($table);
-            foreach ($cols as $col) {
-                $res[$col['Field']] = $col['Type'];
-            }
-
-            yield self::$cache->set($table . '__cols', $res);
-            return $res;
-        });
-    }
-
-    private static function getFullCols($table): Amp\Promise
-    {
-        return Internal::resultSetToArray(self::query("describe $table"));
+        return self::$currentDriver->count($type, $where, $bindings);
     }
 }
