@@ -8,7 +8,7 @@ use AsyncOrm\ORM;
 use Amp\PHPUnit\AsyncTestCase;
 use AsyncOrm\OrmObject;
 
-final class CUFDTest extends AsyncTestCase
+final class CURDTest extends AsyncTestCase
 {
 
     protected function setUpAsync()
