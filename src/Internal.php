@@ -1,6 +1,6 @@
 <?php
 
-namespace async_orm;
+namespace AsyncOrm;
 
 use Amp;
 use Amp\Mysql;
@@ -9,7 +9,7 @@ use function \Amp\call;
 class Internal
 {
     // create array full of '?' and implode it with ','
-    static function question($num)
+    public static function question($num)
     {
         return implode(',', array_fill(0, $num, '?'));
     }
