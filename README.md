@@ -23,6 +23,6 @@ Amp\Loop::run(function(){
 
 ## todo
 
-- [ V ] tests
+- [x] tests
 - [ ] relations
 - [ ] fix structure
