@@ -13,6 +13,7 @@ final class CURDTest extends AsyncTestCase
 
     protected function setUpAsync()
     {
+        ORM::reset();
         yield ORM::connect('localhost', 'user', 'pass', 'db');
         $this->assertTrue(ORM::isReady());
     }

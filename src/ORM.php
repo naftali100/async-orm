@@ -25,6 +25,9 @@ class ORM
     public static function connect($host, $user, $pass, $db, $dbName = null)
     {
         return call(function () use ($host, $user, $pass, $db, $dbName) {
+            if(isset(self::$drivers[$dbName ?? $db])){
+                throw new \Error('connection to: "' . ($dbName ?? $db) . '" already exist');
+            }
             self::$currentDriver = self::$drivers[$dbName ?? $db] = yield MysqlDriver::createDriver($host, $user, $pass, $db);
         });
     }
@@ -42,6 +45,12 @@ class ORM
     {
         return self::$currentDriver->isReady();
     }
+
+    public static function reset(){
+        self::$drivers = [];
+    }
+
+    /// orm operations - CURD
 
     /**
      * create empty row in $table that can be stored later in db

@@ -12,6 +12,7 @@ final class ConnectionTest extends AsyncTestCase
 
      function testConnection()
     {
+        ORM::reset();
         yield ORM::connect('localhost', 'user', 'pass', 'db');
         $this->assertTrue(ORM::isReady());
     }
