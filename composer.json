@@ -1,0 +1,14 @@
+{
+    "require": {
+        "amphp/amp": "^2.6",
+        "amphp/mysql": "^2.1"
+    },
+    "require-dev": {
+        "amphp/phpunit-util": "^2.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "AsyncOrm\\": "./src/"
+        }
+    }
+}
