@@ -45,7 +45,7 @@ abstract class Driver
 
     public function initCache()
     {
-        if($this->cache != null){
+        if($this->cache == null){
             // https://stackoverflow.com/a/804089/12893054
             // maybe change NativeSerializer to JsonSerializer
             $this->cache = new SerializedCache(new ArrayCache(), new NativeSerializer());
