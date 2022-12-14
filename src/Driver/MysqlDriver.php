@@ -7,9 +7,6 @@ use AsyncOrm\Driver;
 use function Amp\call;
 use Amp\Promise;
 use Amp\Mysql;
-use Amp\Cache\ArrayCache;
-use Amp\Cache\SerializedCache;
-use Amp\Serialization\NativeSerializer;
 
 class MysqlDriver extends Driver
 {
@@ -23,13 +20,6 @@ class MysqlDriver extends Driver
     {
         $this->db = $db;
         $this->initCache();
-    }
-
-    public function initCache()
-    {
-        // https://stackoverflow.com/a/804089/12893054
-        // maybe change NativeSerializer to JsonSerializer
-        $this->cache = new SerializedCache(new ArrayCache(), new NativeSerializer());
     }
 
     public static function createDriver($host, $user, $pass, $db): Promise

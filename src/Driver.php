@@ -4,6 +4,9 @@ namespace AsyncOrm;
 
 use Amp\Promise;
 use Amp\Success;
+use Amp\Cache\ArrayCache;
+use Amp\Cache\SerializedCache;
+use Amp\Serialization\NativeSerializer;
 use function Amp\call;
 
 use AsyncOrm\Internal;
@@ -39,6 +42,15 @@ abstract class Driver
     abstract public function isReady(): bool;
     abstract public function execute($sql, $bindings): Promise;
     abstract public function query($sql): Promise;
+
+    public function initCache()
+    {
+        if($this->cache != null){
+            // https://stackoverflow.com/a/804089/12893054
+            // maybe change NativeSerializer to JsonSerializer
+            $this->cache = new SerializedCache(new ArrayCache(), new NativeSerializer());
+        }
+    }
 
     /**
      * load row by id
