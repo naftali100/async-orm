@@ -45,7 +45,7 @@ abstract class Driver
 
     public function initCache()
     {
-        if($this->cache == null){
+        if ($this->cache == null) {
             // https://stackoverflow.com/a/804089/12893054
             // maybe change NativeSerializer to JsonSerializer
             $this->cache = new SerializedCache(new ArrayCache(), new NativeSerializer());
@@ -104,11 +104,13 @@ abstract class Driver
     public function findOne($table, $where = '1', $bindings = []): Promise
     {
         return call(function () use ($table, $where, $bindings) {
-            $result = yield Internal::getOneFromSet($this->execute("SELECT * FROM $table WHERE $where LIMIT 1", $bindings));
-            if ($result) {
-                return new OrmObject($table, $result);
+            if (in_array($table, yield $this->getTables())) {
+                $result = yield Internal::getOneFromSet($this->execute("SELECT * FROM $table WHERE $where LIMIT 1", $bindings));
+                if ($result) {
+                    return new OrmObject($table, $result);
+                }
             }
-            return null;
+            return new OrmObject($table);
         });
     }
 
@@ -133,20 +135,19 @@ abstract class Driver
             return $p;
         }
         return call(function () use ($ormObject) {
-            if ($ormObject->getMeta('changed')) {
-                $ormObject->setMeta('changed', false);
-
-                if (!$this->freeze) {
-                    yield $this->adjustToObj($ormObject);
-                }
-
-                if ($ormObject->getMeta('created')) {
-                    yield $this->insert($ormObject);
-                } else { // its updated
-                    yield $this->update($ormObject);
-                }
-                $ormObject->save();
+            if (!$this->freeze) {
+                yield $this->adjustToObj($ormObject);
             }
+
+            if ($ormObject->getMeta('created')) {
+                yield $this->insert($ormObject);
+            } else if ($ormObject->getMeta('changed')) {
+                yield $this->update($ormObject);
+            }
+            $ormObject->save();
+            $ormObject->setMeta('changed', false);
+            $ormObject->setMeta('created', false);
+
             return $ormObject->id;
         });
     }
@@ -158,7 +159,7 @@ abstract class Driver
     }
 
 
-    private function insert($ormObject)
+    private function insert(OrmObject $ormObject)
     {
         return call(function () use ($ormObject) {
             $ormObject->setMeta('created', false);
@@ -166,11 +167,20 @@ abstract class Driver
             $table = $ormObject->getMeta('type');
             $changes = $ormObject->getChanges();
 
+
+            $idType = (yield $this->getColumns($table))['id'];
+            if (!str_starts_with($idType, 'int')) {
+                $uuid = Internal::uuidv4();
+                $changes['id'] = $uuid;
+                $ormObject->id = $uuid;
+            }
+
             $question = Internal::question(count($changes));
             $sql = "INSERT INTO {$table} (" . implode(', ', array_keys($changes)) . ") VALUES({$question}) ";
-
             $res = yield $this->execute($sql, array_values($changes));
-            $ormObject->id = $res->getLastInsertId();
+            if ($ormObject->id == 0) {
+                $ormObject->id = $res->getLastInsertId();
+            }
             return $ormObject->id;
         });
     }
@@ -204,7 +214,7 @@ abstract class Driver
 
             $changes = $obj->getChanges();
             $table = $obj->getMeta('type');
-            $cols = yield $this->getCols($table);
+            $cols = yield $this->getColumns($table);
 
             if ([] != $diff = array_diff_key($changes, $cols)) {
                 $p = [];
@@ -218,7 +228,7 @@ abstract class Driver
         });
     }
 
-    private function getTables(): Promise
+    public function getTables(): Promise
     {
         return call(function () {
             $tables = yield $this->cache->get('tables');
@@ -262,7 +272,7 @@ abstract class Driver
     protected function addCol(string $table, string $col, string $sql_type)
     {
         return call(function () use ($table, $col, $sql_type) {
-            $cols = yield $this->getCols($table);
+            $cols = yield $this->getColumns($table);
             if (in_array($col, $cols)) {
                 return true;
             }
@@ -273,7 +283,7 @@ abstract class Driver
         });
     }
 
-    protected function getCols($table): Promise
+    public function getColumns($table): Promise
     {
         return call(function () use ($table) {
             $cols = yield $this->cache->get($table . '__cols');

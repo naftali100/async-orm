@@ -8,8 +8,8 @@ namespace AsyncOrm;
 class OrmObject
 {
     private $__info = [];
-    private $properties;
-    private $new_values;
+    private $properties = [];
+    private $new_values = [];
 
     function __construct($type, array $data = [])
     {
