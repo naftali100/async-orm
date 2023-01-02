@@ -110,7 +110,6 @@ abstract class Driver
                     return new OrmObject($table, $result);
                 }
             }
-            return new OrmObject($table);
         });
     }
 

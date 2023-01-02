@@ -77,10 +77,13 @@ class ORM
     {
         return self::$currentDriver->findOne($type, $where, $bindings);
     }
+    /**
+     * @return \Amp\Promise<OrmObject>
+     */
     public static function findOneOrCreate($type, $where = '1', $bindings = []){
         return call(function() use($type, $where , $bindings){
             $res = yield self::findOne($type, $where, $bindings);
-            return $res ?? new OrmObject('type');
+            return $res ?? new OrmObject($type);
         });
     }
 
