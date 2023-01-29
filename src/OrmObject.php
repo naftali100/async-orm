@@ -14,7 +14,7 @@ class OrmObject
     function __construct($type, array $data = [])
     {
         $this->__info['type'] = $type;
-        $this->__info['created'] = !isset($data['id']); // if obj has id - its already exist in db
+        $this->__info['created'] = empty($data);
         if ($this->__info['created']) {
             $data['id'] = 0;
         }
