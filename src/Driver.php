@@ -196,7 +196,7 @@ abstract class Driver
                 $sql .= $key . ' = ?, ';
             }
             $sql = rtrim($sql, ', '); // remove comma from last foreach iteration
-            $sql .= " WHERE id = " . $id;
+            $sql .= " WHERE id = '" . $id . "'";
 
             return yield $this->execute($sql, array_values($changes));
         });
