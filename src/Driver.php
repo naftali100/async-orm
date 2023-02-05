@@ -168,7 +168,7 @@ abstract class Driver
 
 
             $cols = (yield $this->getColumns($table));
-            if ($cols['id'] && !str_starts_with($cols['id'], 'int')) {
+            if (array_key_exists('id', $cols) && !str_starts_with($cols['id'], 'int')) {
                 $uuid = Internal::uuidv4();
                 $changes['id'] = $uuid;
                 $ormObject->id = $uuid;
